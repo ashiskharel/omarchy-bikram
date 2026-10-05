@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "ashis.bikram",
   "name": "Bikram Sambat",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "Ashis K",
   "description": "Nepal's civil date on the bar, with the 2083 government holiday list in the month panel.",
   "kinds": ["bar-widget"],

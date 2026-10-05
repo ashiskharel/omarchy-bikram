@@ -1,14 +1,22 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3
 """Bikram Sambat dates for the Omarchy bar.
 
 Month lengths come from the vendored Apache-2.0 table. Holidays are local
-JSON. This program does not open a network connection.
+JSON. The month grid does not use the network. Once a month, the notice
+command reads one Home Ministry page and compares the posted file's name,
+size, and upload id with the reviewed list. It does not download that file
+and it does not replace the list.
 """
 
 import argparse
 import csv
 import json
+import re
 import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -88,6 +96,13 @@ SCOPES = {
     "kirat": "Kirat",
     "disability": "people with disabilities",
 }
+NOTICE_LIMIT = 256 * 1024
+NOTICE_DEADLINE = 15
+NOTICE_CHUNK = 8192
+NOTICE_INTERVAL_DAYS = 30
+NOTICE_CACHE_LIMIT = 4096
+NOTICE_HOSTS = frozenset({"moha.gov.np", "www.moha.gov.np"})
+NOTICE_FIELDS = ("pdf_name", "pdf_size", "upload")
 
 
 def digits(number, script):
@@ -302,6 +317,194 @@ def month_payload(year, month, today, script):
     }
 
 
+class NoticeError(Exception):
+    pass
+
+
+def notice_page(year):
+    return f"https://moha.gov.np/page/government-and-public-holidays-in-{year}"
+
+
+def allowed_notice_url(url):
+    parts = urllib.parse.urlsplit(url)
+    if parts.scheme != "https" or parts.username or parts.password:
+        return False
+    if parts.hostname not in NOTICE_HOSTS:
+        return False
+    prefix = "/page/government-and-public-holidays-in-"
+    return parts.path.startswith(prefix) and parts.path[len(prefix):].isdigit()
+
+
+class NoticeRedirect(urllib.request.HTTPRedirectHandler):
+    def __init__(self):
+        super().__init__()
+        self.max_redirections = 2
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if not allowed_notice_url(newurl):
+            raise NoticeError("redirect left the Home Ministry holiday page")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def read_bounded(response, limit, deadline, now=time.monotonic):
+    """Read at most `limit` bytes. A longer body is rejected before use."""
+    declared = response.headers.get("Content-Length")
+    if declared is not None:
+        try:
+            size = int(declared)
+        except (TypeError, ValueError) as exc:
+            raise NoticeError("Content-Length was not a number") from exc
+        if size < 0 or size > limit:
+            raise NoticeError(f"response declared {size} bytes; limit is {limit}")
+    encoding = (response.headers.get("Content-Encoding") or "").strip().lower()
+    if encoding not in ("", "identity"):
+        raise NoticeError("compressed notice pages are not read")
+    body = bytearray()
+    while len(body) <= limit:
+        if now() > deadline:
+            raise NoticeError("the Home Ministry page took too long")
+        chunk = response.read(min(NOTICE_CHUNK, limit + 1 - len(body)))
+        if not chunk:
+            break
+        body.extend(chunk)
+    if len(body) > limit:
+        raise NoticeError(f"response exceeded {limit} bytes")
+    return bytes(body)
+
+
+def fetch_notice_page(url):
+    if not allowed_notice_url(url):
+        raise NoticeError("the notice address is not a Home Ministry holiday page")
+    deadline = time.monotonic() + NOTICE_DEADLINE
+    request = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "omarchy-bikram/1.1",
+            "Accept-Encoding": "identity",
+        },
+    )
+    opener = urllib.request.build_opener(NoticeRedirect())
+    try:
+        with opener.open(request, timeout=NOTICE_DEADLINE) as response:
+            if not allowed_notice_url(response.geturl()):
+                raise NoticeError("redirect left the Home Ministry holiday page")
+            body = read_bounded(response, NOTICE_LIMIT, deadline)
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            raise NoticeError("not-posted") from exc
+        raise NoticeError("the Home Ministry page could not be read") from exc
+    except urllib.error.URLError as exc:
+        raise NoticeError("the Home Ministry page could not be read") from exc
+    except TimeoutError as exc:
+        raise NoticeError("the Home Ministry page took too long") from exc
+    return body.decode("utf-8", "replace")
+
+
+def parse_notice(html):
+    name = re.search(r">\s*([^<>\n]*?\.pdf)\s*<", html)
+    upload = re.search(r"/upload/([0-9a-f]{32})/files/", html)
+    if not name or not upload:
+        raise NoticeError("the Home Ministry page has no holiday file")
+    window = html[name.start():name.start() + 800]
+    size = re.search(r"(\d+(?:\.\d+)?\s*[KMG]B)", window)
+    if not size:
+        raise NoticeError("the Home Ministry page has no file size")
+    return {
+        "pdf_name": " ".join(name.group(1).split()),
+        "pdf_size": " ".join(size.group(1).split()),
+        "upload": upload.group(1),
+    }
+
+
+def same_notice(seen, reviewed):
+    if not seen or not reviewed:
+        return False
+    return all(seen.get(field) == reviewed.get(field) for field in NOTICE_FIELDS)
+
+
+def load_reviewed(year):
+    path = ROOT / "holidays" / f"{year}.json"
+    if not path.is_file():
+        return None
+    reviewed = json.loads(path.read_text()).get("reviewed")
+    if not isinstance(reviewed, dict):
+        return None
+    if not all(isinstance(reviewed.get(field), str) and reviewed[field] for field in NOTICE_FIELDS):
+        return None
+    return {field: reviewed[field] for field in NOTICE_FIELDS}
+
+
+def cache_fresh(cache, today):
+    if cache.get("seen") is None:
+        return False
+    try:
+        checked = date.fromisoformat(str(cache.get("checked_on")))
+    except ValueError:
+        return False
+    return 0 <= (today - checked).days < NOTICE_INTERVAL_DAYS
+
+
+def read_notice_cache(path):
+    if not path.is_file():
+        return {}
+    try:
+        payload = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def write_notice_cache(path, payload):
+    text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+    if len(text.encode("utf-8")) > NOTICE_CACHE_LIMIT:
+        raise NoticeError("notice cache would be too large")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".json.tmp")
+    temporary.write_text(text)
+    temporary.replace(path)
+
+
+def notice_line(year, seen, reviewed, problem):
+    if problem == "not-posted" and reviewed is None:
+        return f"The Home Ministry has not posted the {year} holiday page. This calendar has no reviewed list for that year."
+    if problem:
+        if reviewed is None:
+            return f"The Home Ministry page could not be read. This calendar has no reviewed list for {year}."
+        return f"The Home Ministry page could not be read. This calendar still uses the reviewed {year} list."
+    if reviewed is None and seen:
+        return f"The Home Ministry has posted {seen['pdf_name']}. This calendar has no reviewed list for {year}."
+    if seen and reviewed and not same_notice(seen, reviewed):
+        return f"The Home Ministry holiday file changed. This calendar still uses the reviewed {year} list."
+    return ""
+
+
+def notice_payload(today, cache_dir, fetch=fetch_notice_page):
+    year, _month, _day = ad_to_bs(today)
+    reviewed = load_reviewed(year)
+    path = Path(cache_dir) / "notice.json"
+    cache = read_notice_cache(path)
+    problem = ""
+    if cache.get("year") == year and cache_fresh(cache, today):
+        seen = cache.get("seen")
+    else:
+        try:
+            seen = parse_notice(fetch(notice_page(year)))
+        except NoticeError as exc:
+            seen = None
+            problem = str(exc)
+        else:
+            write_notice_cache(
+                path,
+                {"checked_on": today.isoformat(), "year": year, "seen": seen},
+            )
+    return {
+        "ok": problem == "",
+        "changed": bool(seen and reviewed and not same_notice(seen, reviewed)),
+        "line": notice_line(year, seen, reviewed, problem),
+        "year": year,
+    }
+
+
 def emit(payload):
     json.dump(payload, sys.stdout, ensure_ascii=False)
     sys.stdout.write("\n")
@@ -339,6 +542,17 @@ def command_month(args):
     return 0
 
 
+def command_notice(args):
+    today = date.fromisoformat(args.today) if args.today else date.today()
+    cache_dir = Path(args.cache) if args.cache else Path.home() / ".cache" / "omarchy-bikram"
+
+    def fetch(_url):
+        return Path(args.html).read_text(encoding="utf-8")
+
+    emit(notice_payload(today, cache_dir, fetch if args.html else fetch_notice_page))
+    return 0
+
+
 def build_parser():
     parser = argparse.ArgumentParser(description="Bikram Sambat dates")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -355,6 +569,12 @@ def build_parser():
     month.add_argument("--script", default="ne")
     month.add_argument("--today", help="Gregorian today, for tests")
     month.set_defaults(func=command_month)
+
+    notice = sub.add_parser("notice")
+    notice.add_argument("--today", help="Gregorian today, for tests")
+    notice.add_argument("--cache", help="Directory for the notice fingerprint")
+    notice.add_argument("--html", help="Read this page instead of the ministry site")
+    notice.set_defaults(func=command_notice)
     return parser
 
 

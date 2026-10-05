@@ -34,9 +34,11 @@ That disables the plugin and deletes the installed copy. The rest of the bar sta
 
 ## Dates and holidays
 
-Conversion uses a vendored month-length table for Bikram Sambat 1975 through 2100. Nepal's civil months run 29 to 32 days, so the table is the calendar. The panel asks the system clock for Nepal time and does not open a network connection.
+Conversion uses a vendored month-length table for Bikram Sambat 1975 through 2100. Nepal's civil months run 29 to 32 days, so the table is the calendar. The month grid reads the system clock and the files shipped with the plugin.
 
-The 2083 holiday list is transcribed from the Ministry of Home Affairs notice of 2082-11-18 (2 March 2026), Nepal Gazette book 26242. Each included day was checked so the Bikram date and the Gregorian date in that notice are the same day. A later year needs a new file in `holidays/`.
+The 2083 holiday list is the Ministry of Home Affairs notice for that year. Each included day was checked so the Bikram Sambat date and the Gregorian date in that notice are the same day. Days the notice left undated are omitted. A later year needs a new reviewed file in `holidays/`.
+
+Once a month, opening the panel reads one page on moha.gov.np, the holiday page for the current Bikram Sambat year. The read is HTTPS, stays on that host, refuses a compressed body, and stops at 256 KiB or 15 seconds. The page is not saved. The plugin keeps the posted file's name, size, and upload id, and compares them with the reviewed list. It does not download the PDF. If that file changes, the panel says so and continues to show the reviewed list until the list itself is updated. If the page cannot be read, the reviewed list stays in use.
 
 ## License
 

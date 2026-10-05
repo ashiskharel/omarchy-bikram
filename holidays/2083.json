@@ -1,7 +1,12 @@
 {
   "year": 2083,
   "source": "Ministry of Home Affairs notice of 2082-11-18 (2 March 2026), Nepal Gazette book 26242, transcribed from the public summary at Pradhan Law. A date is included only when that summary gives both a Bikram Sambat day and a Gregorian day. Eid, Saruwa Pawani, Bhoto Jatra, Muhammad Jayanti, and Guru Nanak Jayanti were published as dates still to be fixed, so they are absent.",
-  "source_url": "http://rajpatra.dop.gov.np/welcome/book/?ref=26242",
+  "source_url": "https://moha.gov.np/page/government-and-public-holidays-in-2083",
+  "reviewed": {
+    "pdf_name": "२०८३_सालको_सार्वजनिक_विदा_(67_11_18).pdf",
+    "pdf_size": "8.22 MB",
+    "upload": "e66443e81e8cc9c4fa5c099a1fb1bb87"
+  },
   "weekend": "saturday",
   "holidays": [
     {"bs": [2083, 1, 1], "name_en": "Nepali New Year", "name_ne": "नयाँ वर्ष", "scope": "nationwide"},

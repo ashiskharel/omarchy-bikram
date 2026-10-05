@@ -18,6 +18,7 @@ Panel {
   property string label: "…"
   property string mark: "…"
   property string status: ""
+  property string noticeLine: ""
   property var todayInfo: ({})
   property var monthInfo: ({})
   property int viewYear: 0
@@ -44,17 +45,25 @@ Panel {
     return decodeURIComponent(url)
   }
 
+  function pythonCommand(args) {
+    var command = ["/usr/bin/python3", "-I", "-B", scriptPath()]
+    for (var i = 0; i < args.length; i++) command.push(args[i])
+    return command
+  }
+
   function open() {
     openedFromHotkey = false
     setCenterHoverRevealSuppressed(false)
     root.controller.show()
     refresh(setting("era", "both"), setting("script", "ne"))
+    checkNotice()
   }
 
   function openFromHotkey() {
     openedFromHotkey = true
     root.controller.show()
     refresh(setting("era", "both"), setting("script", "ne"))
+    checkNotice()
     Qt.callLater(function() {
       if (root.opened) setCenterHoverRevealSuppressed(true)
     })
@@ -90,7 +99,7 @@ Panel {
       todayAgain = true
       return
     }
-    todayProc.command = ["python3", "-B", scriptPath(), "today", "--era", eraNow, "--script", scriptNow]
+    todayProc.command = pythonCommand(["today", "--era", eraNow, "--script", scriptNow])
     todayProc.running = true
   }
 
@@ -100,7 +109,7 @@ Panel {
       monthAgain = true
       return
     }
-    monthProc.command = ["python3", "-B", scriptPath(), "month", "--year", String(viewYear), "--month", String(viewMonth), "--script", scriptNow]
+    monthProc.command = pythonCommand(["month", "--year", String(viewYear), "--month", String(viewMonth), "--script", scriptNow])
     monthProc.running = true
   }
 
@@ -119,6 +128,23 @@ Panel {
     viewMonth = month
     selectedDay = 0
     loadMonth()
+  }
+
+  function checkNotice() {
+    if (noticeProc.running) return
+    noticeProc.command = pythonCommand(["notice"])
+    noticeProc.running = true
+  }
+
+  function applyNotice(raw) {
+    var parsed
+    try {
+      parsed = JSON.parse(raw)
+    } catch (e) {
+      noticeLine = ""
+      return
+    }
+    noticeLine = parsed.line || ""
   }
 
   function choose(key, value) {
@@ -222,6 +248,14 @@ Panel {
         root.monthAgain = false
         root.loadMonth()
       }
+    }
+  }
+
+  Process {
+    id: noticeProc
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.applyNotice(text || "")
     }
   }
 
@@ -454,6 +488,17 @@ Panel {
               }
               color: root.ink
               opacity: 0.55
+              font.family: root.face
+              font.pixelSize: Style.font.caption
+            }
+
+            Text {
+              width: parent.width
+              wrapMode: Text.WordWrap
+              visible: root.noticeLine !== ""
+              text: root.noticeLine
+              color: root.ink
+              opacity: 0.75
               font.family: root.face
               font.pixelSize: Style.font.caption
             }
