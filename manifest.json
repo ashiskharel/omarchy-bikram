@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "ashis.bikram",
+  "name": "Bikram Sambat",
+  "version": "1.0.0",
+  "author": "Ashis K",
+  "description": "Nepal's civil date on the bar, with the 2083 government holiday list in the month panel.",
+  "kinds": ["bar-widget"],
+  "entryPoints": { "barWidget": "BarWidget.qml" },
+  "barWidget": {
+    "displayName": "Bikram Sambat",
+    "description": "Bikram Sambat date and government holidays",
+    "category": "Time",
+    "allowMultiple": false,
+    "defaultSection": "center"
+  }
+}
